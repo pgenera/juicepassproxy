@@ -1,6 +1,6 @@
-from pyproxy import pyproxy
 import argparse
 import logging
+from scapy.all import *
 from ha_mqtt_discoverable import Settings, DeviceInfo
 from ha_mqtt_discoverable.sensors import SensorInfo, Sensor
 
@@ -183,10 +183,9 @@ def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
                                      description=AP_DESCRIPTION)
 
-    parser.add_argument('-s', '--src', required=True, default="127.0.0.1:8047",
-                        help="Source IP and port, (default: %(default)s)")
-    parser.add_argument('-d', '--dst', required=True, 
-                        help='Destination IP and port of EnelX Server.')
+    parser.add_argument("-j", "--juicebox", required=True, default="198.19.128.64:click,198.19.128.63:clack",
+                        help="comma seperated IP:name tuples of juiceboxen")
+    parser.add_argument("-i", "--interface", required=True, help="interface to listen on")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("-u", "--user", type=str, help="MQTT username")
     parser.add_argument("-P", "--password", type=str, help="MQTT password")
@@ -198,9 +197,9 @@ def main():
                         dest="discovery_prefix",
                         default="homeassistant",
                         help="Home Assistant MQTT topic prefix (default: %(default)s)")
-    parser.add_argument("--name", type=str, default="Juicebox",
-                        help="Home Assistant Device Name (default: %(default)s)",
-                        dest="device_name")
+    # parser.add_argument("--name", type=str, default="Juicebox",
+    #                     help="Home Assistant Device Name (default: %(default)s)",
+    #                     dest="device_name")
     args = parser.parse_args()
 
     if args.debug:
@@ -209,13 +208,24 @@ def main():
     mqttsettings = Settings.MQTT(host=args.host, port=args.port,
                                  username=args.user, password=args.password,
                                  discovery_prefix=args.discovery_prefix)
-    handler = JuiceboxMessageHandler(mqtt_settings=mqttsettings, 
-                                     device_name=args.device_name)
 
-    pyproxy.LOCAL_DATA_HANDLER = handler.local_data_handler
-    pyproxy.REMOTE_DATA_HANDLER = handler.remote_data_handler
-
-    pyproxy.udp_proxy(args.src, args.dst)
-
+    # for each configured JB, make one of these:
+    boxes = args.juicebox.split(',')
+    handlers = {}
+    for box in boxes:
+        # "198.19.1.1:pants"
+        t = box.split(':')
+        
+        handlers[t[0]] = JuiceboxMessageHandler(mqtt_settings=mqttsettings, 
+                                              device_name=t[1])
+    
+    # capture packets forever
+    f = "udp and not dst 255.255.255 and (src 198.19.128.64 or src 198.19.128.63)" # needs to be formatted.
+    while True:
+        capture = sniff(iface=args.interface, filter=f, count=1)
+        packet = capture[0]
+        ip = packet.getlayer(IP)
+        handlers[ip.src].local_data_handler(bytes(ip[UDP].payload));
+                
 if __name__ == '__main__':
     main()
